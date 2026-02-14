@@ -20,6 +20,10 @@
         .tab-content.active { display: block; opacity: 1; }
         .tab-btn.active { @apply bg-white/10 text-white shadow-inner border-b-2 border-blue-400; }
         
+        /* Glowing Text Effects */
+        .text-glow-green { text-shadow: 0 0 5px #22c55e, 0 0 10px #22c55e; color: #4ade80; font-weight: 800; letter-spacing: 1px; }
+        .text-glow-red { text-shadow: 0 0 5px #ef4444, 0 0 10px #ef4444; color: #f87171; font-weight: 800; letter-spacing: 1px; }
+
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: #1e293b; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
@@ -138,6 +142,34 @@
             <div class="flex gap-2">
                 <button onclick="performReset()" class="flex-1 bg-red-600 hover:bg-red-700 text-white py-3 rounded-xl font-bold">Ya, Reset</button>
                 <button onclick="toggleModal('reset-confirm-modal')" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 py-3 rounded-xl font-bold">Batal</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Registration Status Modal (NEW) -->
+    <div id="status-check-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 hidden transition-opacity duration-300">
+        <div class="bg-slate-800 rounded-2xl w-full max-w-3xl h-[80vh] flex flex-col shadow-2xl border border-slate-600">
+            <div class="p-6 border-b border-slate-700 flex justify-between items-center bg-slate-900/50 rounded-t-2xl">
+                <div>
+                    <h2 class="text-xl font-bold text-white flex items-center gap-2"><span>📊</span> Semakan Status Pendaftaran</h2>
+                    <p class="text-slate-400 text-sm mt-1">Senarai acara yang telah dan belum didaftarkan.</p>
+                </div>
+                <button onclick="toggleModal('status-check-modal')" class="text-slate-400 hover:text-white transition"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-6 bg-slate-900/50">
+                <div class="flex gap-4 mb-4 text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-700 pb-2">
+                    <div class="flex-1">Nama Acara</div>
+                    <div class="w-20 text-center">Kategori</div>
+                    <div class="w-32 text-center">Status</div>
+                </div>
+                <div id="status-check-list" class="space-y-2">
+                    <!-- List items populated by JS -->
+                </div>
+            </div>
+
+            <div class="p-4 border-t border-slate-700 bg-slate-900/50 rounded-b-2xl text-right">
+                <button onclick="toggleModal('status-check-modal')" class="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-lg transition">Tutup</button>
             </div>
         </div>
     </div>
@@ -265,7 +297,8 @@
             </div>
             <div class="flex items-center gap-3">
                 <div id="connection-status" class="flex items-center gap-2 px-3 py-1 bg-slate-700 rounded-full text-xs font-medium text-slate-300"><span class="w-2 h-2 rounded-full bg-slate-500 animate-pulse"></span> Offline</div>
-                <button onclick="toggleModal('login-modal')" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">⚙️ Admin</button>
+                <button id="btn-login" onclick="toggleModal('login-modal')" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">⚙️ Admin</button>
+                <button id="btn-logout" onclick="handleLogout()" class="hidden bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">🚪 Logout</button>
             </div>
         </div>
     </header>
@@ -513,7 +546,13 @@
 
                 <!-- Event Registration (EDIT MODE) -->
                 <div class="bg-slate-800/50 rounded-2xl p-6 backdrop-blur-sm border border-slate-700 mb-6">
-                    <h3 class="text-lg font-bold mb-4 flex items-center gap-2">📋 Daftar & Edit Peserta Acara</h3>
+                    <div class="flex flex-wrap justify-between items-center mb-4 gap-4">
+                        <h3 class="text-lg font-bold flex items-center gap-2">📋 Daftar & Edit Peserta Acara</h3>
+                        <button onclick="openStatusCheckModal()" class="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 border border-slate-500 rounded-lg text-sm font-bold text-white transition shadow-lg group">
+                            <span>🔍</span> Semakan Status
+                            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse group-hover:bg-green-400"></span>
+                        </button>
+                    </div>
                     <div class="bg-slate-900/50 p-6 rounded-xl border border-slate-600 text-center">
                         <label class="block text-slate-300 font-medium mb-3">Pilih Acara untuk Menguruskan Pendaftaran:</label>
                         <div class="max-w-md mx-auto">
@@ -593,8 +632,9 @@
                     </div>
                 </div>
 
-                <div class="flex justify-end items-center mt-8 pt-4 border-t border-slate-700">
+                <div class="flex justify-end items-center mt-8 pt-4 border-t border-slate-700 gap-4">
                     <button onclick="requestReset()" class="text-red-400 text-xs hover:text-red-300 underline">Reset Data Sistem</button>
+                    <button onclick="handleLogout()" class="text-slate-400 text-xs hover:text-white underline">Log Keluar Admin</button>
                 </div>
             </div>
         </div>
@@ -739,12 +779,72 @@
     window.handleLogin = function() {
         if(document.getElementById('admin-password').value === 'admin123') {
             document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
+            document.getElementById('btn-login').classList.add('hidden');
+            document.getElementById('btn-logout').classList.remove('hidden');
             toggleModal('login-modal');
             switchTab('tab-admin');
             initAdminInputs();
+            showToast("Log masuk admin berjaya!", "success");
         } else { 
             alert("Kata laluan salah!");
+            document.getElementById('admin-password').value = ''; // Clear password on wrong attempt
         }
+    }
+
+    window.handleLogout = function() {
+        if(confirm("Anda pasti mahu log keluar dari mod Admin?")) {
+            // 1. Sembunyikan elemen admin
+            document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
+            
+            // 2. Tukar butang Header
+            document.getElementById('btn-login').classList.remove('hidden');
+            document.getElementById('btn-logout').classList.add('hidden');
+            
+            // 3. Kosongkan input password & tutup modal jika terbuka
+            document.getElementById('admin-password').value = '';
+            document.getElementById('login-modal').classList.add('hidden');
+
+            // 4. Paksa tukar ke tab utama & refresh
+            switchTab('tab-scoreboard');
+            renderScoreboard(); 
+            
+            showToast("Log keluar berjaya.");
+        }
+    }
+
+    // --- NEW: Status Check Logic ---
+    window.openStatusCheckModal = function() {
+        const container = document.getElementById('status-check-list');
+        
+        // Sort events alphabetically
+        const sortedEvents = [...appData.events].sort((a,b) => a.name.localeCompare(b.name));
+        
+        if (sortedEvents.length === 0) {
+            container.innerHTML = '<p class="text-center text-slate-500 italic py-10">Tiada acara didaftarkan dalam sistem.</p>';
+        } else {
+            container.innerHTML = sortedEvents.map(ev => {
+                const hasParticipants = ev.participants && ev.participants.length > 0;
+                const statusHtml = hasParticipants 
+                    ? `<span class="text-glow-green">SELESAI</span>` 
+                    : `<span class="text-glow-red">BELUM DAFTAR</span>`;
+                
+                return `
+                <div class="flex items-center gap-4 bg-slate-800 p-3 rounded-lg border border-slate-700 hover:bg-slate-700 transition">
+                    <div class="flex-1">
+                        <div class="font-bold text-white text-sm">${ev.name}</div>
+                        <div class="text-[10px] text-slate-400">${ev.code || '-'}</div>
+                    </div>
+                    <div class="w-20 text-center">
+                        <span class="category-badge ${getCategoryBadge(ev.category)}">${ev.category}</span>
+                    </div>
+                    <div class="w-32 text-center text-sm">
+                        ${statusHtml}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+        
+        toggleModal('status-check-modal');
     }
 
     // --- Helpers ---
