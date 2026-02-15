@@ -966,6 +966,7 @@
         return allowedYears.includes(firstChar);
     }
     
+    // MOVED UP: isFieldEvent helper needs to be defined before it is used
     const isFieldEvent = (eventOrName) => { 
         if (typeof eventOrName === 'object' && eventOrName !== null) { 
             if (eventOrName.type === 'field') return true; 
@@ -1092,15 +1093,53 @@
     
     function renderScoreboard() {
         document.getElementById('header-school-name').innerText = appData.config.schoolName;
-        document.getElementById('header-year').innerText = "Kejohanan Olahraga & Sukan Tahunan " + appData.config.year;
+        document.getElementById('header-year').innerText = "Sukan Tahunan " + appData.config.year;
+        
         const houseStats = {};
-        appData.houses.filter(h => h.active !== false).forEach(h => { houseStats[h.id] = { id: h.id, name: h.name, gold:0, silver:0, bronze:0, points:0 }; });
-        appData.athletes.forEach(a => {
-            const hId = getNormalizedHouseId(a.house);
-            if(houseStats[hId]) {
-                houseStats[hId].gold += (a.medals.gold || 0); houseStats[hId].silver += (a.medals.silver || 0); houseStats[hId].bronze += (a.medals.bronze || 0); houseStats[hId].points += a.points;
-            }
+        appData.houses.filter(h => h.active !== false).forEach(h => { 
+            houseStats[h.id] = { id: h.id, name: h.name, gold:0, silver:0, bronze:0, points:0 }; 
         });
+
+        // --- UPDATED LOGIC: Calculate House Stats from Results Log (Smart Relay Detection) ---
+        if (appData.resultsLog) {
+            appData.resultsLog.forEach(log => {
+                // Only count Final results (Akhir)
+                if (log.stage !== 'Akhir' || !log.winners) return;
+
+                // Detect Relay Events
+                const isRelay = /4x|kuartet|relay|berpasukan/i.test(log.eventName);
+                const houseRankTracker = new Set(); // To track unique (HouseID-Rank) pairs for this event
+
+                log.winners.forEach(w => {
+                    const hId = getNormalizedHouseId(w.house);
+                    if (!houseStats[hId]) return;
+
+                    const rank = parseInt(w.rank);
+                    const rankKey = `${hId}-${rank}`;
+
+                    // SMART RELAY LOGIC:
+                    // If it's a relay event, only count the medal/points once per rank for the house.
+                    // e.g. If 4 students from "Red House" won Rank 1, only credit Red House once.
+                    if (isRelay) {
+                        if (houseRankTracker.has(rankKey)) return; // Skip if this house-rank already counted
+                        houseRankTracker.add(rankKey);
+                    }
+
+                    // Add Medal
+                    if (rank === 1) houseStats[hId].gold += 1;
+                    else if (rank === 2) houseStats[hId].silver += 1;
+                    else if (rank === 3) houseStats[hId].bronze += 1;
+
+                    // Add Points (Standard points based on config)
+                    if (rank === 1) houseStats[hId].points += appData.pointsConfig.gold;
+                    else if (rank === 2) houseStats[hId].points += appData.pointsConfig.silver;
+                    else if (rank === 3) houseStats[hId].points += appData.pointsConfig.bronze;
+                    else if (rank === 4) houseStats[hId].points += appData.pointsConfig.fourth;
+                });
+            });
+        }
+        
+        // Add External Points (Merentas Desa / Sukantara)
         const ext = appData.externalPoints;
         const houses = ['Merah', 'Biru', 'Kuning', 'Hijau'];
         if (ext.merentasDesa.enabled) houses.forEach(id => { if(houseStats[id]) houseStats[id].points += parseInt(ext.merentasDesa.scores[id] || 0); });
@@ -1767,7 +1806,7 @@
         ev.laneAssignment = currentLaneAssignments;
 
         saveData();
-        showToast(`Yahoo! Pendaftaran untuk ${ev.name} berjaya!`);
+        showToast(`Pendaftaran & Tetapan Lorong untuk ${ev.name} berjaya disimpan!`);
         closeRegModal();
     }
 
@@ -1885,94 +1924,18 @@
     }
 
     window.submitDetailedResult = function() {
-        const evId = document.getElementById('result-event').value; 
-        const stage = document.querySelector('input[name="result-stage"]:checked')?.value;
-        
+        const evId = document.getElementById('result-event').value; const stage = document.querySelector('input[name="result-stage"]:checked')?.value;
         if(!evId || !stage) return showToast("Sila pilih acara dan peringkat.", "error");
-        
-        const ev = appData.events.find(e => e.id.toString() === evId);
-        
-        // --- LOGIC PENCEGAHAN PERTINDIHAN MARKAH (NEW) ---
-        // 1. Cari jika log keputusan lama wujud untuk acara & peringkat yang sama
-        const existingLogIndex = appData.resultsLog.findIndex(l => l.eventId.toString() === evId.toString() && l.stage === stage);
-        
-        if (existingLogIndex > -1) {
-            const oldLog = appData.resultsLog[existingLogIndex];
-            
-            // 2. Jika ini peringkat Akhir (yang melibatkan markah), tolak balik markah/pingat lama
-            if (stage === "Akhir" && oldLog.winners) {
-                oldLog.winners.forEach(w => {
-                    let athlete = null;
-                    if (w.id) {
-                        athlete = appData.athletes.find(a => a.id.toString() === w.id.toString());
-                    } else {
-                        athlete = appData.athletes.find(a => a.name === w.name);
-                    }
-
-                    if (athlete) {
-                        const rank = parseInt(w.rank);
-                        if(rank === 1) { 
-                            athlete.medals.gold = Math.max(0, (athlete.medals.gold || 0) - 1); 
-                            athlete.points -= appData.pointsConfig.gold; 
-                        } else if(rank === 2) { 
-                            athlete.medals.silver = Math.max(0, (athlete.medals.silver || 0) - 1); 
-                            athlete.points -= appData.pointsConfig.silver; 
-                        } else if(rank === 3) { 
-                            athlete.medals.bronze = Math.max(0, (athlete.medals.bronze || 0) - 1); 
-                            athlete.points -= appData.pointsConfig.bronze; 
-                        } else if(rank === 4) { 
-                            athlete.points -= appData.pointsConfig.fourth; 
-                        }
-                    }
-                });
-            }
-            
-            // 3. Padam log lama supaya tidak bertindih dengan yang baru
-            appData.resultsLog.splice(existingLogIndex, 1);
-        }
-        // --- TAMAT LOGIC PENCEGAHAN ---
-
-        const rankInputs = document.querySelectorAll('.result-rank-input');
-        const valInputs = document.querySelectorAll('.result-val-input');
-        let winners = []; 
-        let hasWinner = false;
-        
-        rankInputs.forEach((input, index) => { 
-            const athleteId = input.dataset.id; 
-            const rank = input.value; 
-            const value = valInputs[index].value; 
-            const athlete = appData.athletes.find(a => a.id.toString() === athleteId);
-            
-            if(rank && athlete) { 
-                hasWinner = true; 
-                winners.push({ id: athlete.id, name: athlete.name, house: getDisplayHouseName(athlete.house), rank: rank, value: value });
-                if(stage === "Akhir") { 
-                    if(rank === "1") { athlete.medals.gold++; athlete.points += appData.pointsConfig.gold; } 
-                    else if(rank === "2") { athlete.medals.silver++; athlete.points += appData.pointsConfig.silver; } 
-                    else if(rank === "3") { athlete.medals.bronze++; athlete.points += appData.pointsConfig.bronze; } 
-                    else if(rank === "4") { athlete.points += appData.pointsConfig.fourth; } 
-                } 
-            } 
-        });
-        
+        const ev = appData.events.find(e => e.id.toString() === evId); const rankInputs = document.querySelectorAll('.result-rank-input'); const valInputs = document.querySelectorAll('.result-val-input');
+        let winners = []; let hasWinner = false;
+        rankInputs.forEach((input, index) => { const athleteId = input.dataset.id; const rank = input.value; const value = valInputs[index].value; const athlete = appData.athletes.find(a => a.id.toString() === athleteId);
+            if(rank && athlete) { hasWinner = true; winners.push({ name: athlete.name, house: getDisplayHouseName(athlete.house), rank: rank, value: value });
+                if(stage === "Akhir") { if(rank === "1") { athlete.medals.gold++; athlete.points += appData.pointsConfig.gold; } else if(rank === "2") { athlete.medals.silver++; athlete.points += appData.pointsConfig.silver; } else if(rank === "3") { athlete.medals.bronze++; athlete.points += appData.pointsConfig.bronze; } else if(rank === "4") { athlete.points += appData.pointsConfig.fourth; } } } });
         if(!hasWinner) return showToast("Sila pilih sekurang-kurangnya seorang pemenang.", "error");
-        
+        if(!appData.resultsLog) appData.resultsLog = []; appData.resultsLog = appData.resultsLog.filter(l => !(l.eventId === ev.id && l.stage === stage));
         appData.resultsLog.push({ eventId: ev.id, eventName: ev.name, stage: stage, winners: winners, timestamp: new Date().toISOString() });
-        
-        if(stage === "Akhir") {
-            ev.status = 'completed'; 
-            ev.result = { winners };
-        }
-        
-        saveData(); 
-        showToast("Keputusan berjaya disimpan!"); 
-        
-        // Reset UI
-        document.getElementById('result-event').value = ""; 
-        document.getElementById('result-stage-container').classList.add('hidden'); 
-        document.getElementById('result-entry-table-container').classList.add('hidden'); 
-        renderCompletedResultsTable(); 
-        renderScreeningResultsTable();
+        if(stage === "Akhir") ev.status = 'completed'; if(stage === "Akhir") ev.result = { winners };
+        saveData(); showToast("Keputusan berjaya disimpan!"); document.getElementById('result-event').value = ""; document.getElementById('result-stage-container').classList.add('hidden'); document.getElementById('result-entry-table-container').classList.add('hidden'); renderCompletedResultsTable(); renderScreeningResultsTable();
     }
 
     // ... (Completed, Screening Results, Print functions RESTORED) ...
@@ -1996,13 +1959,59 @@
 
     window.printSingleResult = function(eventId) { const ev = appData.events.find(e => e.id.toString() === eventId.toString()); const log = appData.resultsLog.slice().reverse().find(l => l.eventId === ev.id && l.stage === 'Akhir'); if (!log) return showToast("Tiada data keputusan ditemui.", "error"); currentPdfFilename = `Keputusan_${ev.name.replace(/\s+/g, '_')}.pdf`; const contentDiv = document.getElementById('pdf-preview-content'); contentDiv.innerHTML = ''; const page = document.createElement('div'); page.className = 'pdf-page'; const winners = log.winners.sort((a,b) => a.rank - b.rank); const rows = winners.map(w => `<tr class="border-b border-gray-300"><td class="p-2 text-center border-r border-gray-300 font-bold">${w.rank}</td><td class="p-2 border-r border-gray-300 font-semibold uppercase">${w.name}</td><td class="p-2 text-center border-r border-gray-300">${w.house}</td><td class="p-2 text-center">${w.value || '-'}</td></tr>`).join(''); page.innerHTML = `<div class="text-center border-b-2 border-black pb-2 mb-6"><h1 class="text-xl font-bold uppercase">${appData.config.schoolName}</h1><h2 class="text-sm font-semibold uppercase">KEPUTUSAN RASMI - ${appData.config.year}</h2></div><div class="mb-4 p-2 bg-gray-100 border border-gray-300"><div class="flex justify-between font-bold text-sm uppercase"><span>ACARA: ${ev.name}</span><span>KATEGORI: ${ev.category}</span></div></div><table class="w-full border border-black text-sm mb-8"><thead class="bg-gray-200 border-b border-black font-bold"><tr><th class="p-2 border-r border-black w-16">KED</th><th class="p-2 border-r border-black text-left">NAMA PEMENANG</th><th class="p-2 border-r border-black w-32">RUMAH</th><th class="p-2 w-32">CATATAN</th></tr></thead><tbody>${rows}</tbody></table><div class="mt-12 flex justify-end"><div class="text-center w-64"><div class="border-t border-black pt-2 text-xs font-bold">TANDATANGAN REFERI BALAPAN</div></div></div>`; contentDiv.appendChild(page); document.getElementById('pdf-preview-modal').classList.remove('hidden'); }
 
-    // const isFieldEvent = ... (Duplicate removed)
+    window.printEventForms = function(type) {
+        const container = document.getElementById('pdf-preview-content'); 
+        container.innerHTML = ''; 
+        currentPdfFilename = `Borang_Hakim_${type === 'track' ? 'Balapan' : 'Padang'}_${appData.config.year}.pdf`; 
+        currentPdfOrientation = type === 'track' ? 'portrait' : 'landscape'; 
+        
+        if (!appData.events || appData.events.length === 0) return showToast("Tiada acara untuk dicetak.", "error"); 
+        
+        const filteredEvents = appData.events.filter(e => type === 'track' ? !isFieldEvent(e) : isFieldEvent(e)); 
+        
+        if (filteredEvents.length === 0) { return showToast(`Tiada acara ${type === 'track' ? 'Balapan' : 'Padang'} ditemui.`, "error"); } 
+        
+        filteredEvents.sort((a,b) => a.name.localeCompare(b.name)); 
+        
+        filteredEvents.forEach((ev, index) => { 
+            let participants = []; 
+            if (ev.participants && ev.participants.length > 0) { 
+                participants = ev.participants.map(pid => appData.athletes.find(a => a.id.toString() === pid.toString())).filter(x => x); 
+            } 
+            const laneMap = ev.laneAssignment || {}; 
+            participants.sort((a,b) => (a.class || '').localeCompare(b.class || '') || a.name.localeCompare(b.name)); 
+            
+            const page = document.createElement('div'); 
+            page.className = `pdf-page ${type === 'track' ? '' : 'landscape'}`; 
+            
+            let html = `<div class="text-center border-b-2 border-black pb-2 mb-4"><h1 class="text-xl font-bold uppercase">${appData.config.schoolName}</h1><h2 class="text-sm font-semibold uppercase">BORANG HAKIM - ${appData.config.year}</h2></div><div class="flex justify-between items-center mb-4 border p-2 bg-gray-100 text-xs shadow-sm"><div class="w-1/4"><strong>NO. ACARA:</strong> ${ev.code || '-'}</div><div class="w-1/4"><strong>ACARA:</strong> <span class="uppercase font-bold text-sm">${ev.name}</span></div><div class="w-1/4 text-center"><strong>KATEGORI:</strong> <span class="bg-black text-white px-2 py-0.5 rounded">${ev.category}</span></div><div class="w-1/4 text-right font-bold text-gray-600 uppercase">ACARA ${type === 'track' ? 'BALAPAN (TRACK)' : 'PADANG (FIELD)'}</div></div>`; 
+            
+            let rows = '';
+            if (participants.length === 0) {
+                 rows = `<tr><td colspan="${type === 'track' ? 7 : 14}" class="text-center py-12 italic text-gray-400">Tiada pendaftaran peserta.</td></tr>`;
+            } else {
+                rows = participants.map((p, i) => { 
+                    if (type === 'track') {
+                        const lorong = laneMap[p.id] || '-'; 
+                        return `<tr class="border-b border-gray-300 h-10 text-xs"><td class="p-2 text-center border-r border-gray-300">${i + 1}</td><td class="p-2 text-center border-r border-gray-300 font-bold bg-gray-50 text-base">${lorong}</td><td class="p-2 border-r border-gray-300 pl-3 font-semibold uppercase text-left">${p.name}</td><td class="p-2 text-center border-r border-gray-300">${p.class || '-'}</td><td class="p-2 text-center border-r border-gray-300">${getDisplayHouseName(p.house)}</td><td class="p-2 text-center border-r border-gray-300"></td><td class="p-2 text-center"></td></tr>`;
+                    } else {
+                        return `<tr class="border-b border-gray-300 h-8 text-[10px]"><td class="p-1 text-center border-r border-gray-300">${i + 1}</td><td class="p-1 border-r border-gray-300 pl-2 font-semibold uppercase truncate max-w-[150px] text-left">${p.name}</td><td class="p-1 text-center border-r border-gray-300">${p.class || '-'}</td><td class="p-1 text-center border-r border-gray-300">${getDisplayHouseName(p.house)}</td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-8"></td> <td></td></tr>`;
+                    }
+                }).join(''); 
+            }
 
-    window.printFieldForms = function() { const container = document.getElementById('pdf-preview-content'); container.innerHTML = ''; currentPdfFilename = `Borang_Hakim_Padang_${appData.config.year}.pdf`; currentPdfOrientation = 'landscape'; if (!appData.events || appData.events.length === 0) return showToast("Tiada acara untuk dicetak.", "error"); const fieldEvents = appData.events.filter(e => isFieldEvent(e)); if (fieldEvents.length === 0) { return showToast("Tiada acara Padang ditemui.", "error"); } fieldEvents.sort((a,b) => a.name.localeCompare(b.name)); fieldEvents.forEach((ev, index) => { let participants = []; if (ev.participants && ev.participants.length > 0) { participants = ev.participants.map(pid => appData.athletes.find(a => a.id.toString() === pid.toString())).filter(x => x); } participants.sort((a,b) => (a.class || '').localeCompare(b.class || '') || a.name.localeCompare(b.name)); const page = document.createElement('div'); page.className = 'pdf-page landscape'; let html = `<div class="text-center border-b-2 border-black pb-2 mb-4"><h1 class="text-xl font-bold uppercase">${appData.config.schoolName}</h1><h2 class="text-sm font-semibold uppercase">BORANG HAKIM - ${appData.config.year}</h2></div><div class="flex justify-between items-center mb-4 border p-2 bg-gray-100 text-xs shadow-sm"><div class="w-1/4"><strong>NO. ACARA:</strong> ${ev.code || '-'}</div><div class="w-1/4"><strong>ACARA:</strong> <span class="uppercase font-bold text-sm">${ev.name}</span></div><div class="w-1/4 text-center"><strong>KATEGORI:</strong> <span class="bg-black text-white px-2 py-0.5 rounded">${ev.category}</span></div><div class="w-1/4 text-right font-bold text-gray-600 uppercase">ACARA PADANG (FIELD)</div></div>`; const rows = participants.length === 0 ? `<tr><td colspan="14" class="text-center py-12 italic text-gray-400">Tiada pendaftaran peserta.</td></tr>` : participants.map((p, i) => `<tr class="border-b border-gray-300 h-8 text-[10px]"><td class="p-1 text-center border-r border-gray-300">${i + 1}</td><td class="p-1 border-r border-gray-300 pl-2 font-semibold uppercase truncate max-w-[150px] text-left">${p.name}</td><td class="p-1 text-center border-r border-gray-300">${p.class || '-'}</td><td class="p-1 text-center border-r border-gray-300">${getDisplayHouseName(p.house)}</td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-gray-300 w-4"></td><td class="border-r border-black w-4 bg-gray-100"></td><td class="border-r border-gray-300 w-8"></td> <td></td></tr>`).join(''); html += `<table class="w-full border border-black text-[10px]"><thead class="bg-gray-200 border-b border-black font-bold text-center"><tr><th rowspan="2" class="p-1 border-r border-black w-6">BIL</th><th rowspan="2" class="p-1 border-r border-black w-48 text-left pl-2">NAMA PESERTA</th><th rowspan="2" class="p-1 border-r border-black w-10">KELAS</th><th rowspan="2" class="p-1 border-r border-black w-12">RUMAH</th><th colspan="24" class="p-1 border-r border-black border-b border-gray-400">PERCUBAAN (JARAK/TINGGI)</th><th rowspan="2" class="p-1 border-r border-black w-8">KED</th><th rowspan="2" class="p-1 w-16">CATATAN</th></tr><tr><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th></tr></thead><tbody>${rows}</tbody></table><div class="mt-2 text-[9px] text-gray-500 italic">* Tanda 'X' untuk gagal, '-' untuk tiada percubaan.</div>`; html += `<div class="mt-12 flex justify-between text-[10px] pt-4"><div class="text-center w-1/4"><div class="border-b border-black mb-1 h-8"></div><div class="font-bold">TANDATANGAN HAKIM</div></div><div class="text-center w-1/4"><div class="border-b border-black mb-1 h-8"></div><div class="font-bold">TANDATANGAN PENCATAT</div></div><div class="text-center w-1/4"><div class="border-b border-black mb-1 h-8"></div><div class="font-bold">PENGESAHAN REFERI</div></div></div><div class="absolute bottom-5 left-10 right-10 flex justify-between text-[8px] text-gray-400 border-t pt-1"><span>Dicetak: ${new Date().toLocaleDateString('ms-MY')} ${new Date().toLocaleTimeString('ms-MY')}</span><span>Sistem Pengurusan Sukan Sekolah</span></div>`; page.innerHTML = html; container.appendChild(page); }); document.getElementById('pdf-preview-modal').classList.remove('hidden');
+            if (type === 'track') {
+                html += `<table class="w-full border border-black text-xs"><thead class="bg-gray-200 border-b border-black font-bold"><tr><th class="p-2 border-r border-black w-10">BIL</th><th class="p-2 border-r border-black w-16 bg-gray-300">LORONG</th><th class="p-2 border-r border-black text-left pl-3">NAMA PESERTA</th><th class="p-2 border-r border-black w-20">KELAS</th><th class="p-2 border-r border-black w-24">RUMAH</th><th class="p-2 border-r border-black w-16">KED</th><th class="p-2 w-32">MASA / CATATAN</th></tr></thead><tbody>${rows}</tbody></table><div class="mt-2 text-[9px] text-gray-500 italic">* Sila isikan masa dalam format MM:SS.ms atau SS.ms.</div>`;
+            } else {
+                html += `<table class="w-full border border-black text-[10px]"><thead class="bg-gray-200 border-b border-black font-bold text-center"><tr><th rowspan="2" class="p-1 border-r border-black w-6">BIL</th><th rowspan="2" class="p-1 border-r border-black w-48 text-left pl-2">NAMA PESERTA</th><th rowspan="2" class="p-1 border-r border-black w-10">KELAS</th><th rowspan="2" class="p-1 border-r border-black w-12">RUMAH</th><th colspan="24" class="p-1 border-r border-black border-b border-gray-400">PERCUBAAN (JARAK/TINGGI)</th><th rowspan="2" class="p-1 border-r border-black w-8">KED</th><th rowspan="2" class="p-1 w-16">CATATAN</th></tr><tr><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-gray-400 w-4"></th><th class="border-r border-black w-4 bg-gray-300"></th></tr></thead><tbody>${rows}</tbody></table><div class="mt-2 text-[9px] text-gray-500 italic">* Tanda 'X' untuk gagal, '-' untuk tiada percubaan.</div>`;
+            }
+            
+            html += `<div class="mt-12 flex justify-between text-[10px] pt-4"><div class="text-center w-1/4"><div class="border-b border-black mb-1 h-8"></div><div class="font-bold">TANDATANGAN HAKIM</div></div><div class="text-center w-1/4"><div class="border-b border-black mb-1 h-8"></div><div class="font-bold">TANDATANGAN PENCATAT</div></div><div class="text-center w-1/4"><div class="border-b border-black mb-1 h-8"></div><div class="font-bold">PENGESAHAN REFERI</div></div></div><div class="absolute bottom-5 left-10 right-10 flex justify-between text-[8px] text-gray-400 border-t pt-1"><span>Dicetak: ${new Date().toLocaleDateString('ms-MY')} ${new Date().toLocaleTimeString('ms-MY')}</span><span>Sistem Pengurusan Sukan Sekolah</span></div>`; page.innerHTML = html; container.appendChild(page); }); document.getElementById('pdf-preview-modal').classList.remove('hidden');
     }
-
-    window.printTrackForms = function() { const container = document.getElementById('pdf-preview-content'); container.innerHTML = ''; currentPdfFilename = `Borang_Hakim_Balapan_${appData.config.year}.pdf`; currentPdfOrientation = 'portrait'; if (!appData.events || appData.events.length === 0) return showToast("Tiada acara untuk dicetak.", "error"); const trackEvents = appData.events.filter(e => !isFieldEvent(e)); if (trackEvents.length === 0) { return showToast("Tiada acara Balapan ditemui.", "error"); } trackEvents.sort((a,b) => a.name.localeCompare(b.name)); trackEvents.forEach((ev, index) => { let participants = []; if (ev.participants && ev.participants.length > 0) { participants = ev.participants.map(pid => appData.athletes.find(a => a.id.toString() === pid.toString())).filter(x => x); } const laneMap = ev.laneAssignment || {}; participants.sort((a,b) => (a.class || '').localeCompare(b.class || '') || a.name.localeCompare(b.name)); const page = document.createElement('div'); page.className = 'pdf-page'; let html = `<div class="text-center border-b-2 border-black pb-2 mb-4"><h1 class="text-xl font-bold uppercase">${appData.config.schoolName}</h1><h2 class="text-sm font-semibold uppercase">BORANG HAKIM - ${appData.config.year}</h2></div><div class="flex justify-between items-center mb-4 border p-2 bg-gray-100 text-xs shadow-sm"><div class="w-1/4"><strong>NO. ACARA:</strong> ${ev.code || '-'}</div><div class="w-1/4"><strong>ACARA:</strong> <span class="uppercase font-bold text-sm">${ev.name}</span></div><div class="w-1/4 text-center"><strong>KATEGORI:</strong> <span class="bg-black text-white px-2 py-0.5 rounded">${ev.category}</span></div><div class="w-1/4 text-right font-bold text-gray-600 uppercase">ACARA BALAPAN (TRACK)</div></div>`; const rows = participants.length === 0 ? `<tr><td colspan="7" class="text-center py-12 italic text-gray-400">Tiada pendaftaran peserta.</td></tr>` : participants.map((p, i) => { const lorong = laneMap[p.id] || '-'; return `<tr class="border-b border-gray-300 h-10 text-xs"><td class="p-2 text-center border-r border-gray-300">${i + 1}</td><td class="p-2 text-center border-r border-gray-300 font-bold bg-gray-50 text-base">${lorong}</td><td class="p-2 border-r border-gray-300 pl-3 font-semibold uppercase text-left">${p.name}</td><td class="p-2 text-center border-r border-gray-300">${p.class || '-'}</td><td class="p-2 text-center border-r border-gray-300">${getDisplayHouseName(p.house)}</td><td class="p-2 text-center border-r border-gray-300"></td><td class="p-2 text-center"></td></tr>`}).join(''); html += `<table class="w-full border border-black text-xs"><thead class="bg-gray-200 border-b border-black font-bold"><tr><th class="p-2 border-r border-black w-10">BIL</th><th class="p-2 border-r border-black w-16 bg-gray-300">LORONG</th><th class="p-2 border-r border-black text-left pl-3">NAMA PESERTA</th><th class="p-2 border-r border-black w-20">KELAS</th><th class="p-2 border-r border-black w-24">RUMAH</th><th class="p-2 border-r border-black w-16">KED</th><th class="p-2 w-32">MASA / CATATAN</th></tr></thead><tbody>${rows}</tbody></table><div class="mt-2 text-[9px] text-gray-500 italic">* Sila isikan masa dalam format MM:SS.ms atau SS.ms.</div>`; html += `<div class="mt-12 flex justify-between text-[10px] pt-4"><div class="text-center w-1/4"><div class="border-b border-black mb-1 h-8"></div><div class="font-bold">TANDATANGAN HAKIM</div></div><div class="text-center w-1/4"><div class="border-b border-black mb-1 h-8"></div><div class="font-bold">TANDATANGAN PENCATAT</div></div><div class="text-center w-1/4"><div class="border-b border-black mb-1 h-8"></div><div class="font-bold">PENGESAHAN REFERI</div></div></div><div class="absolute bottom-5 left-10 right-10 flex justify-between text-[8px] text-gray-400 border-t pt-1"><span>Dicetak: ${new Date().toLocaleDateString('ms-MY')} ${new Date().toLocaleTimeString('ms-MY')}</span><span>Sistem Pengurusan Sukan Sekolah</span></div>`; page.innerHTML = html; container.appendChild(page); }); document.getElementById('pdf-preview-modal').classList.remove('hidden');
-    }
+    
+    // Attach separate functions for button clicks
+    window.printTrackForms = function() { window.printEventForms('track'); }
+    window.printFieldForms = function() { window.printEventForms('field'); }
 
     // --- NEW FUNCTIONS FOR DELETE/OVERWRITE (RESTORED) ---
     window.deleteAllStudents = function() { if(confirm("AWAS: Anda akan memadam SEMUA data murid. Tindakan ini tidak boleh dikembalikan. Teruskan?")) { appData.athletes = []; saveData(); renderUploadedStudentPreview(); refreshDropdowns(); showToast("Semua data murid berjaya dipadam.", "success"); } }
@@ -2010,30 +2019,11 @@
     window.deleteEvent = function(id) { if(confirm("Padam acara ini?")) { appData.events = appData.events.filter(e => e.id.toString() !== id.toString()); saveData(); renderEventPreview(); refreshDropdowns(); showToast("Acara dipadam."); } }
     window.deleteAllSchedule = function() { if(confirm("AWAS: Anda akan memadam keseluruhan jadual. Teruskan?")) { appData.scheduleItems = []; saveData(); renderSchedulePreview(); renderSchedule(); showToast("Jadual berjaya dikosongkan.", "success"); } }
     window.deleteScheduleItem = function(id) { if(confirm("Padam item jadual ini?")) { appData.scheduleItems = appData.scheduleItems.filter(s => s.id.toString() !== id.toString()); saveData(); renderSchedulePreview(); renderSchedule(); showToast("Item jadual dipadam."); } }
-    
-    function renderEventPreview() { const container = document.getElementById('event-preview-container'); const tbody = document.getElementById('event-preview-body'); if(!appData.events || appData.events.length === 0) { container.classList.add('hidden'); return; } container.classList.remove('hidden'); tbody.innerHTML = appData.events.map(e => `<tr class="hover:bg-slate-700/50"><td class="p-2 font-medium text-white">${e.code ? e.code : '-'}</td><td class="p-2 font-medium text-white">${e.name}</td><td class="p-2 text-slate-400">${e.category}</td><td class="p-2 text-center"><button onclick="deleteEvent('${e.id}')" class="text-red-400 hover:text-red-300 p-1 rounded" title="Padam"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button></td></tr>`).join(''); }
-    window.renderEventPreview = renderEventPreview;
-
-    function renderSchedulePreview() { const container = document.getElementById('schedule-preview-container'); const tbody = document.getElementById('schedule-preview-body'); if(!appData.scheduleItems || appData.scheduleItems.length === 0) { container.classList.add('hidden'); return; } container.classList.remove('hidden'); tbody.innerHTML = appData.scheduleItems.map(s => `<tr class="hover:bg-slate-700/50"><td class="p-2 font-medium text-white whitespace-nowrap">${s.time}</td><td class="p-2 text-slate-300 truncate max-w-[150px]">${s.event}</td><td class="p-2 text-center"><button onclick="deleteScheduleItem('${s.id}')" class="text-red-400 hover:text-red-300 p-1 rounded" title="Padam"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button></td></tr>`).join(''); }
-    window.renderSchedulePreview = renderSchedulePreview;
-
+    window.renderEventPreview = function() { const container = document.getElementById('event-preview-container'); const tbody = document.getElementById('event-preview-body'); if(!appData.events || appData.events.length === 0) { container.classList.add('hidden'); return; } container.classList.remove('hidden'); tbody.innerHTML = appData.events.map(e => `<tr class="hover:bg-slate-700/50"><td class="p-2 font-medium text-white">${e.code ? e.code : '-'}</td><td class="p-2 font-medium text-white">${e.name}</td><td class="p-2 text-slate-400">${e.category}</td><td class="p-2 text-center"><button onclick="deleteEvent('${e.id}')" class="text-red-400 hover:text-red-300 p-1 rounded" title="Padam"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button></td></tr>`).join(''); }
+    window.renderSchedulePreview = function() { const container = document.getElementById('schedule-preview-container'); const tbody = document.getElementById('schedule-preview-body'); if(!appData.scheduleItems || appData.scheduleItems.length === 0) { container.classList.add('hidden'); return; } container.classList.remove('hidden'); tbody.innerHTML = appData.scheduleItems.map(s => `<tr class="hover:bg-slate-700/50"><td class="p-2 font-medium text-white whitespace-nowrap">${s.time}</td><td class="p-2 text-slate-300 truncate max-w-[150px]">${s.event}</td><td class="p-2 text-center"><button onclick="deleteScheduleItem('${s.id}')" class="text-red-400 hover:text-red-300 p-1 rounded" title="Padam"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button></td></tr>`).join(''); }
     window.requestReset = function() { toggleModal('reset-confirm-modal'); }
     window.performReset = async function() { toggleModal('reset-confirm-modal'); try { localStorage.clear(); appData = JSON.parse(JSON.stringify(defaultData)); if (isFirebaseReady && auth.currentUser) { const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'sukan_main_data', 'app_data'); await setDoc(docRef, defaultData); } showToast("Sistem berjaya di-reset. Refreshing...", "success"); setTimeout(() => location.reload(), 1000); } catch (error) { console.error("Reset failed", error); location.reload(); } }
-    
-    function renderAll() { 
-        renderScoreboard(); 
-        renderAthletesList(); 
-        renderRanking(); 
-        renderChampions(); 
-        renderHopes(); 
-        renderSchedule(); 
-        if(!document.getElementById('login-modal').classList.contains('hidden')) {
-             if (window.initAdminInputs) window.initAdminInputs();
-             else initAdminInputs();
-        } 
-    }
-    window.renderAll = renderAll;
-
+    window.renderAll = function() { renderScoreboard(); renderAthletesList(); renderRanking(); renderChampions(); renderHopes(); renderSchedule(); if(!document.getElementById('login-modal').classList.contains('hidden')) initAdminInputs(); }
     document.addEventListener('DOMContentLoaded', () => { initFirebaseSync(); renderAll(); });
 </script>
 </body>
